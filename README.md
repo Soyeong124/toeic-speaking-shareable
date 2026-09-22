@@ -1,5 +1,7 @@
 # TOEIC Speaking Audio Study
 
+https://github.com/user-attachments/assets/936c185f-ec56-4684-ad9a-e766ace63031
+
 음성 파일을 올리면 영어 스크립트와 단어별 재생 시간을 자동으로 만들어 주는 로컬 토익스피킹 학습 앱입니다. 문제 음성을 들으며 단어를 눌러 원하는 위치로 바로 이동하고, 직접 따라 읽은 녹음도 같은 방식으로 확인할 수 있습니다.
 
 ![TOEIC Speaking Audio Study 전체 화면](docs/images/app-overview.png)
