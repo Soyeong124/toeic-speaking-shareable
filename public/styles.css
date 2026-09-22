@@ -189,8 +189,16 @@ button:disabled {
 
 .folder-delete,
 .track-delete {
-  color: var(--danger);
-  font-size: 22px;
+  display: grid;
+  place-items: center;
+}
+
+.folder-delete img,
+.track-delete img {
+  display: block;
+  width: 19px;
+  height: 19px;
+  object-fit: contain;
 }
 
 .workspace {

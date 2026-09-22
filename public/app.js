@@ -290,7 +290,7 @@ function renderFolders() {
       deleteButton.type = "button";
       deleteButton.title = "폴더 삭제";
       deleteButton.setAttribute("aria-label", `${folder.name} 폴더 삭제`);
-      deleteButton.textContent = "×";
+      deleteButton.innerHTML = '<img src="/Trash.png" alt="" aria-hidden="true">';
       deleteButton.addEventListener("click", () => deleteFolder(folder));
       row.append(deleteButton);
     }
@@ -351,7 +351,7 @@ function renderTracks() {
     deleteButton.type = "button";
     deleteButton.title = "음성 삭제";
     deleteButton.setAttribute("aria-label", `${track.fileName} 삭제`);
-    deleteButton.textContent = "×";
+    deleteButton.innerHTML = '<img src="/Trash.png" alt="" aria-hidden="true">';
     deleteButton.addEventListener("click", () => deleteTrack(track));
 
     row.append(selectButton, favoriteButton, deleteButton);
@@ -756,7 +756,7 @@ async function boot() {
   const favorites = await favoritesResponse.json();
   state.favoriteTrackIds = new Set(favorites.trackIds || []);
   state.folders = library.folders || [];
-  els.audioRoot.textContent = library.audioRoot;
+  els.audioRoot.textContent = "내 컴퓨터에 저장되는 로컬 라이브러리";
 
   const jobsData = jobsResponse.ok ? await jobsResponse.json() : { jobs: [] };
   const activeJobs = (jobsData.jobs || []).filter((job) => job.status === "queued" || job.status === "running");
