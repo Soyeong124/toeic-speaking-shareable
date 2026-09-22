@@ -275,12 +275,27 @@ function renderFolders() {
     const tracks = folder.tracks.filter((track) => `${folder.name} ${track.relativePath}`.toLowerCase().includes(query));
     if (!tracks.length && folder.name !== "즐겨찾기") return;
 
+    const row = document.createElement("div");
+    row.className = `folder-row ${folder.name === "즐겨찾기" ? "protected" : ""}`;
     const button = document.createElement("button");
     button.className = `folder-button ${state.currentFolder?.name === folder.name ? "active" : ""}`;
     button.type = "button";
     button.innerHTML = `<span>${folder.name}</span><span class="count">${tracks.length}</span>`;
     button.addEventListener("click", () => selectFolder(folder.name));
-    els.folderList.append(button);
+    row.append(button);
+
+    if (folder.name !== "즐겨찾기") {
+      const deleteButton = document.createElement("button");
+      deleteButton.className = "folder-delete icon-button";
+      deleteButton.type = "button";
+      deleteButton.title = "폴더 삭제";
+      deleteButton.setAttribute("aria-label", `${folder.name} 폴더 삭제`);
+      deleteButton.textContent = "×";
+      deleteButton.addEventListener("click", () => deleteFolder(folder));
+      row.append(deleteButton);
+    }
+
+    els.folderList.append(row);
   });
 
   if (!state.folders.length) {
@@ -309,25 +324,102 @@ function renderTracks() {
 
   tracks.forEach((track) => {
     const data = getTrackData(track.id);
-    const button = document.createElement("button");
-    button.className = `track-button ${state.currentTrack?.id === track.id ? "active" : ""}`;
-    button.type = "button";
-    button.innerHTML = `
+    const row = document.createElement("div");
+    row.className = `track-row ${state.currentTrack?.id === track.id ? "active" : ""}`;
+
+    const selectButton = document.createElement("button");
+    selectButton.className = "track-select";
+    selectButton.type = "button";
+    selectButton.innerHTML = `
       <span class="track-main">
         <span>${track.fileName}</span>
         <span class="count">${data.script ? "script" : formatBytes(track.size)}</span>
       </span>
-      <span class="favorite-star ${state.favoriteTrackIds.has(track.id) ? "active" : ""}" title="즐겨찾기">
-        ${state.favoriteTrackIds.has(track.id) ? "★" : "☆"}
-      </span>
     `;
-    button.querySelector(".favorite-star").addEventListener("click", (event) => {
-      event.stopPropagation();
-      toggleFavorite(track.id);
-    });
-    button.addEventListener("click", () => selectTrack(track.id));
-    els.trackList.append(button);
+    selectButton.addEventListener("click", () => selectTrack(track.id));
+
+    const favoriteButton = document.createElement("button");
+    favoriteButton.className = `favorite-star icon-button ${state.favoriteTrackIds.has(track.id) ? "active" : ""}`;
+    favoriteButton.type = "button";
+    favoriteButton.title = "즐겨찾기";
+    favoriteButton.setAttribute("aria-label", `${track.fileName} 즐겨찾기`);
+    favoriteButton.textContent = state.favoriteTrackIds.has(track.id) ? "★" : "☆";
+    favoriteButton.addEventListener("click", () => toggleFavorite(track.id));
+
+    const deleteButton = document.createElement("button");
+    deleteButton.className = "track-delete icon-button";
+    deleteButton.type = "button";
+    deleteButton.title = "음성 삭제";
+    deleteButton.setAttribute("aria-label", `${track.fileName} 삭제`);
+    deleteButton.textContent = "×";
+    deleteButton.addEventListener("click", () => deleteTrack(track));
+
+    row.append(selectButton, favoriteButton, deleteButton);
+    els.trackList.append(row);
   });
+}
+
+function resetStudyPanel() {
+  state.currentTrack = null;
+  state.activeRecording = null;
+  state.recordings = [];
+  state.selectedWordIndex = null;
+  els.folderName.textContent = "준비 완료";
+  els.trackTitle.textContent = "파일 또는 폴더를 추가하세요";
+  els.audio.pause();
+  els.audio.removeAttribute("src");
+  els.audio.load();
+  els.scriptInput.value = "";
+  updateOriginalScriptButton();
+  renderScript();
+  renderRecordings();
+}
+
+async function deleteTrack(track) {
+  const confirmed = window.confirm(`"${track.fileName}"을 삭제할까요?\n스크립트, 즐겨찾기, 내 녹음도 함께 삭제됩니다.`);
+  if (!confirmed) return;
+
+  try {
+    const response = await fetch(`/api/audio?path=${encodeURIComponent(track.id)}`, { method: "DELETE" });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || "음성을 삭제하지 못했습니다.");
+
+    if (state.currentTrack?.id === track.id) resetStudyPanel();
+    state.transcripts.tracks && delete state.transcripts.tracks[track.id];
+    state.favoriteTrackIds.delete(track.id);
+    state.folders = data.folders || [];
+    state.currentFolder = getFolderByName(track.folder) || null;
+    renderFolders();
+    renderTracks();
+    toast("음성을 삭제했어요.");
+  } catch (error) {
+    toast(error.message || "음성을 삭제하지 못했습니다.");
+  }
+}
+
+async function deleteFolder(folder) {
+  const confirmed = window.confirm(`"${folder.name}" 폴더와 음성 ${folder.tracks.length}개를 모두 삭제할까요?\n스크립트, 즐겨찾기, 내 녹음도 함께 삭제됩니다.`);
+  if (!confirmed) return;
+
+  try {
+    const response = await fetch(`/api/audio/folder?name=${encodeURIComponent(folder.name)}`, { method: "DELETE" });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || "폴더를 삭제하지 못했습니다.");
+
+    const deletedIds = new Set(folder.tracks.map((track) => track.id));
+    if (state.currentTrack && deletedIds.has(state.currentTrack.id)) resetStudyPanel();
+    deletedIds.forEach((trackId) => {
+      if (state.transcripts.tracks) delete state.transcripts.tracks[trackId];
+      state.favoriteTrackIds.delete(trackId);
+    });
+    state.folders = data.folders || [];
+    state.currentFolder = state.folders[0] || null;
+    renderFolders();
+    renderTracks();
+    toast(`폴더와 음성 ${data.deleted || 0}개를 삭제했어요.`);
+  } catch (error) {
+    toast(error.message || "폴더를 삭제하지 못했습니다.");
+  }
 }
 
 function selectFolder(folderName, options = {}) {

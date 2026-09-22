@@ -208,6 +208,17 @@ function handleTranscriptionEvent(job, event) {
   }
 
   if (event.type === "result" && event.trackId && event.transcript) {
+    const audioPath = safeJoin(AUDIO_ROOT, event.trackId);
+    if (!audioPath || !fs.existsSync(audioPath)) {
+      job.errors.push({ trackId: event.trackId, error: "추출 중 음성 파일이 삭제되었습니다." });
+      updateJob(job, {
+        completed: job.completed + 1,
+        failed: job.failed + 1,
+        current: event.trackId
+      });
+      return;
+    }
+
     mergeTranscript(event.trackId, event.transcript);
     updateJob(job, {
       completed: job.completed + 1,
@@ -524,6 +535,52 @@ function recordingFolderForTrack(trackId) {
   return path.join(RECORDINGS_DIR, safeSegment(parsed.dir || "root"), safeSegment(parsed.name || "track"));
 }
 
+function removeEmptyParents(startPath, stopPath) {
+  const resolvedStop = path.resolve(stopPath);
+  let current = path.resolve(startPath);
+
+  while (current !== resolvedStop && current.startsWith(resolvedStop + path.sep)) {
+    if (!fs.existsSync(current) || fs.readdirSync(current).length > 0) break;
+    fs.rmdirSync(current);
+    current = path.dirname(current);
+  }
+}
+
+function deleteTrackData(trackIds) {
+  const ids = new Set(trackIds);
+
+  const transcripts = readJson(TRANSCRIPTS_FILE, { tracks: {} });
+  transcripts.tracks ||= {};
+  ids.forEach((trackId) => delete transcripts.tracks[trackId]);
+  writeJson(TRANSCRIPTS_FILE, transcripts);
+
+  const favorites = readJson(FAVORITES_FILE, { trackIds: [] });
+  favorites.trackIds = (favorites.trackIds || []).filter((trackId) => !ids.has(trackId));
+  writeJson(FAVORITES_FILE, favorites);
+
+  const recordings = readJson(RECORDINGS_FILE, { tracks: {} });
+  recordings.tracks ||= {};
+  ids.forEach((trackId) => {
+    for (const recording of recordings.tracks[trackId] || []) {
+      const recordingPath = safeJoin(RECORDINGS_DIR, recording.path);
+      if (recordingPath && fs.existsSync(recordingPath)) {
+        fs.unlinkSync(recordingPath);
+        removeEmptyParents(path.dirname(recordingPath), RECORDINGS_DIR);
+      }
+    }
+    delete recordings.tracks[trackId];
+  });
+  writeJson(RECORDINGS_FILE, recordings);
+}
+
+function topLevelFolderPath(folderName) {
+  const name = String(folderName || "");
+  if (!name || name === "." || name === ".." || name.includes("/") || name.includes("\\")) return null;
+  const folderPath = safeJoin(AUDIO_ROOT, name);
+  if (!folderPath || path.dirname(folderPath) !== path.resolve(AUDIO_ROOT)) return null;
+  return folderPath;
+}
+
 function findRecording(data, recordingId) {
   for (const [trackId, recordings] of Object.entries(data.tracks || {})) {
     const index = recordings.findIndex((recording) => recording.id === recordingId);
@@ -632,6 +689,43 @@ function handleApi(req, res, url) {
         sendJson(res, 400, { ok: false, error: uploadError.message || "업로드에 실패했습니다." });
       }
     });
+    return true;
+  }
+
+  if (url.pathname === "/api/audio" && req.method === "DELETE") {
+    const trackId = url.searchParams.get("path") || "";
+    const filePath = safeJoin(AUDIO_ROOT, trackId);
+    if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+      sendJson(res, 404, { ok: false, error: "음성 파일을 찾지 못했습니다." });
+      return true;
+    }
+    if (!AUDIO_EXTENSIONS.has(path.extname(filePath).toLowerCase())) {
+      sendJson(res, 400, { ok: false, error: "삭제할 수 없는 파일입니다." });
+      return true;
+    }
+
+    const normalizedTrackId = path.relative(AUDIO_ROOT, filePath).replaceAll("\\", "/");
+    fs.unlinkSync(filePath);
+    removeEmptyParents(path.dirname(filePath), AUDIO_ROOT);
+    deleteTrackData([normalizedTrackId]);
+    sendJson(res, 200, { ok: true, folders: getLibrary() });
+    return true;
+  }
+
+  if (url.pathname === "/api/audio/folder" && req.method === "DELETE") {
+    const folderName = url.searchParams.get("name") || "";
+    const folderPath = topLevelFolderPath(folderName);
+    if (!folderPath || !fs.existsSync(folderPath) || !fs.statSync(folderPath).isDirectory()) {
+      sendJson(res, 404, { ok: false, error: "음성 폴더를 찾지 못했습니다." });
+      return true;
+    }
+
+    const trackIds = getLibrary()
+      .find((folder) => folder.name === folderName)?.tracks
+      .map((track) => track.id) || [];
+    fs.rmSync(folderPath, { recursive: true });
+    deleteTrackData(trackIds);
+    sendJson(res, 200, { ok: true, deleted: trackIds.length, folders: getLibrary() });
     return true;
   }
 

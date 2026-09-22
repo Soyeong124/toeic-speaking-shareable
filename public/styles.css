@@ -171,10 +171,26 @@ button:disabled {
 }
 
 .folder-button.active,
-.track-button.active {
+.track-row.active {
   border-color: var(--accent);
   background: #f1f8f6;
   color: var(--accent-strong);
+}
+
+.folder-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px;
+  gap: 6px;
+}
+
+.folder-row.protected {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.folder-delete,
+.track-delete {
+  color: var(--danger);
+  font-size: 22px;
 }
 
 .workspace {
@@ -224,17 +240,41 @@ h2 {
   padding: 18px 20px 20px;
 }
 
-.track-button {
+.track-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) 34px 34px;
+  gap: 4px;
   align-items: center;
   width: 100%;
   height: 56px;
   min-height: 56px;
-  padding: 7px 9px 7px 12px;
   overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.track-row:hover {
+  border-color: var(--accent);
+}
+
+.track-select {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  height: 54px;
+  min-width: 0;
+  min-height: 54px;
+  padding: 7px 4px 7px 12px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   text-align: left;
+}
+
+.track-select:hover {
+  border-color: transparent;
 }
 
 .track-main {
@@ -275,6 +315,19 @@ h2 {
   font-size: 22px;
   line-height: 1;
   transform: translateY(-1px);
+}
+
+.icon-button {
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.icon-button:hover {
+  border: 0;
+  background: #f3f4f6;
 }
 
 .favorite-star.active {
