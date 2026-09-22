@@ -1,0 +1,12 @@
+{
+  "name": "toeic-speaking-shareable",
+  "version": "1.0.0",
+  "description": "A local TOEIC Speaking audio study app with browser upload support.",
+  "private": false,
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

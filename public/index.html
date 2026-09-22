@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TOEIC Speaking Audio Study</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="mobile-switcher" aria-label="모바일 화면 전환">
+      <button class="mobile-view-button active" data-view="library" type="button">라이브러리</button>
+      <button class="mobile-view-button" data-view="tracks" type="button">음성</button>
+      <button class="mobile-view-button" data-view="study" type="button">학습</button>
+    </div>
+
+    <div class="app">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand-mark">TS</span>
+          <div>
+            <h1>토익스피킹 음성 학습</h1>
+            <p id="audioRoot">라이브러리를 불러오는 중</p>
+          </div>
+        </div>
+
+        <div class="upload-panel">
+          <input id="fileInput" type="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.webm,.flac" multiple hidden />
+          <input id="folderInput" type="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.webm,.flac" multiple webkitdirectory directory hidden />
+          <button id="fileButton" class="primary" type="button">파일 추가</button>
+          <button id="folderButton" type="button">폴더 추가</button>
+          <p id="uploadStatus">음성 파일이나 폴더를 올려서 시작하세요.</p>
+        </div>
+
+        <label class="search">
+          <span>검색</span>
+          <input id="searchInput" type="search" placeholder="폴더 또는 파일명" />
+        </label>
+
+        <nav id="folderList" class="folder-list" aria-label="음성 폴더"></nav>
+      </aside>
+
+      <main class="workspace">
+        <section class="track-panel">
+          <div class="track-heading">
+            <div>
+              <p class="eyebrow">음성 선택</p>
+              <h2 id="trackListTitle">학습할 파일을 선택하세요</h2>
+            </div>
+          </div>
+          <div id="trackList" class="track-list" aria-label="음성 목록"></div>
+        </section>
+
+        <section class="study-panel">
+          <div class="player-panel">
+            <div>
+              <p id="folderName" class="eyebrow">준비 완료</p>
+              <h2 id="trackTitle">파일 또는 폴더를 추가하세요</h2>
+            </div>
+            <audio id="audioPlayer" controls preload="metadata"></audio>
+          </div>
+
+          <div class="tabs" role="tablist" aria-label="스크립트 보기 방식">
+            <div class="tab-buttons">
+              <button class="tab active" data-tab="read" type="button">읽기</button>
+              <button class="tab" data-tab="edit" type="button">편집</button>
+            </div>
+            <button id="scriptPlayToggleButton" type="button">재생</button>
+          </div>
+
+          <div id="readView" class="read-view">
+            <div id="scriptWords" class="script-words empty">
+              음성을 추가하고 선택한 뒤, 편집 탭에서 영어 스크립트를 붙여넣으세요.
+            </div>
+          </div>
+
+          <div id="editView" class="edit-view hidden">
+            <label>
+              영어 스크립트
+              <textarea id="scriptInput" placeholder="여기에 영어 스크립트를 붙여넣으세요. 저장하면 단어 단위로 클릭할 수 있습니다."></textarea>
+            </label>
+            <div class="edit-actions">
+              <button id="estimateTimesButton" type="button">단어 시간 자동 배치</button>
+              <button id="applyScriptButton" class="primary" type="button">스크립트 저장</button>
+            </div>
+          </div>
+
+          <section class="recording-panel" aria-label="내 녹음">
+            <button id="recordingToggleButton" class="recording-toggle" type="button" aria-expanded="false">
+              <span>내 녹음</span>
+              <span id="recordingSummary">음성 선택 필요</span>
+            </button>
+            <div id="recordingBody" class="recording-body hidden">
+              <div class="recording-controls">
+                <button id="recordButton" type="button">녹음 시작</button>
+                <button id="stopRecordButton" type="button" disabled>정지</button>
+              </div>
+              <div id="recordingList" class="recording-list"></div>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/app.js"></script>
+  </body>
+</html>
