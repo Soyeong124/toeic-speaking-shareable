@@ -444,6 +444,14 @@ textarea {
   background: #fcfcfd;
 }
 
+.recording-actions,
+.script-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .recording-meta {
   display: grid;
   gap: 6px;
@@ -456,7 +464,8 @@ textarea {
   width: 100%;
 }
 
-.delete-recording {
+.delete-recording,
+.transcript-recording {
   white-space: nowrap;
 }
 

@@ -8,6 +8,8 @@ const state = {
   activeTab: "read",
   recordings: [],
   recordingsOpen: false,
+  transcribingRecordingIds: new Set(),
+  activeRecording: null,
   mediaRecorder: null,
   recordingChunks: [],
   recordingStartedAt: null,
@@ -43,6 +45,7 @@ const els = {
   applyScript: $("#applyScriptButton"),
   estimateTimes: $("#estimateTimesButton"),
   scriptPlayToggle: $("#scriptPlayToggleButton"),
+  originalScript: $("#originalScriptButton"),
   recordingToggle: $("#recordingToggleButton"),
   recordingSummary: $("#recordingSummary"),
   recordingBody: $("#recordingBody"),
@@ -88,6 +91,22 @@ function getTrackData(trackId = state.currentTrack?.id) {
   if (!trackId) return { script: "", wordTimes: {} };
   if (!state.transcripts.tracks[trackId]) state.transcripts.tracks[trackId] = { script: "", wordTimes: {} };
   return state.transcripts.tracks[trackId];
+}
+
+function getCurrentScriptData() {
+  if (state.activeRecording) {
+    return {
+      script: state.activeRecording.transcript || "",
+      wordTimes: state.activeRecording.transcriptWordTimes || {}
+    };
+  }
+  return getTrackData();
+}
+
+function updateOriginalScriptButton() {
+  els.originalScript.classList.toggle("hidden", !state.activeRecording);
+  const editTab = [...els.tabs].find((button) => button.dataset.tab === "edit");
+  if (editTab) editTab.disabled = Boolean(state.activeRecording);
 }
 
 function getFolderByName(folderName) {
@@ -323,12 +342,14 @@ function selectTrack(trackId) {
   if (!track) return;
 
   state.currentTrack = track;
+  state.activeRecording = null;
   state.selectedWordIndex = null;
   els.folderName.textContent = track.folder;
   els.trackTitle.textContent = track.fileName;
   els.audio.src = `/media?path=${encodeURIComponent(track.relativePath)}`;
   els.audio.currentTime = 0;
   els.scriptInput.value = getTrackData().script || "";
+  updateOriginalScriptButton();
   renderTracks();
   renderScript();
   loadRecordings();
@@ -336,7 +357,7 @@ function selectTrack(trackId) {
 }
 
 function renderScript() {
-  const data = getTrackData();
+  const data = getCurrentScriptData();
   const words = tokenize(data.script);
   els.scriptWords.innerHTML = "";
 
@@ -374,7 +395,7 @@ function renderScript() {
 }
 
 function updateActiveWord() {
-  const data = getTrackData();
+  const data = getCurrentScriptData();
   const entries = Object.entries(data.wordTimes || {})
     .map(([index, time]) => [Number(index), Number(time)])
     .filter(([, time]) => Number.isFinite(time))
@@ -473,6 +494,9 @@ async function loadRecordings() {
   const response = await fetch(`/api/recordings?trackId=${encodeURIComponent(state.currentTrack.id)}`);
   const data = await response.json();
   state.recordings = data.recordings || [];
+  if (state.activeRecording) {
+    state.activeRecording = state.recordings.find((recording) => recording.id === state.activeRecording.id) || state.activeRecording;
+  }
   renderRecordings();
 }
 
@@ -507,8 +531,17 @@ function renderRecordings() {
         <audio controls preload="metadata" src="/recording?id=${encodeURIComponent(recording.id)}"></audio>
         <span>${formatDateTime(recording.createdAt)} · ${formatDuration(recording.duration)} · ${formatBytes(recording.size)}</span>
       </div>
-      <button class="delete-recording" type="button">삭제</button>
+      <div class="recording-actions">
+        <button class="transcript-recording" type="button">${recording.transcript ? "스크립트 보기" : state.transcribingRecordingIds.has(recording.id) ? "추출 중" : "스크립트 추출"}</button>
+        <button class="delete-recording" type="button">삭제</button>
+      </div>
     `;
+    const transcriptButton = item.querySelector(".transcript-recording");
+    transcriptButton.disabled = state.transcribingRecordingIds.has(recording.id);
+    transcriptButton.addEventListener("click", () => {
+      if (recording.transcript) showRecordingTranscript(recording);
+      else transcribeSavedRecording(recording.id);
+    });
     item.querySelector(".delete-recording").addEventListener("click", () => deleteRecording(recording.id));
     els.recordingList.append(item);
   });
@@ -565,9 +598,57 @@ function stopRecording() {
 }
 
 async function deleteRecording(recordingId) {
+  if (state.activeRecording?.id === recordingId) showOriginalScript();
   await fetch(`/api/recordings?id=${encodeURIComponent(recordingId)}`, { method: "DELETE" });
   await loadRecordings();
   toast("녹음을 삭제했어요.");
+}
+
+async function transcribeSavedRecording(recordingId) {
+  state.transcribingRecordingIds.add(recordingId);
+  renderRecordings();
+  toast("녹음 스크립트를 추출하고 있어요.");
+
+  try {
+    const response = await fetch(`/api/recordings/transcribe?id=${encodeURIComponent(recordingId)}`, { method: "POST" });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || "스크립트 추출에 실패했습니다.");
+    await loadRecordings();
+    showRecordingTranscript(data.recording);
+    toast("녹음 스크립트를 추출했어요.");
+  } catch (error) {
+    toast(error.message || "스크립트 추출에 실패했습니다.");
+  } finally {
+    state.transcribingRecordingIds.delete(recordingId);
+    renderRecordings();
+  }
+}
+
+function showRecordingTranscript(recording) {
+  state.activeRecording = recording;
+  state.selectedWordIndex = null;
+  els.folderName.textContent = "내 녹음";
+  els.trackTitle.textContent = `${formatDateTime(recording.createdAt)} · ${formatDuration(recording.duration)}`;
+  els.audio.src = `/recording?id=${encodeURIComponent(recording.id)}`;
+  els.audio.currentTime = 0;
+  switchTab("read");
+  updateOriginalScriptButton();
+  renderScript();
+  setMobileView("study");
+  toast("녹음 스크립트를 열었어요.");
+}
+
+function showOriginalScript() {
+  if (!state.currentTrack) return;
+  state.activeRecording = null;
+  state.selectedWordIndex = null;
+  els.folderName.textContent = state.currentTrack.folder;
+  els.trackTitle.textContent = state.currentTrack.fileName;
+  els.audio.src = `/media?path=${encodeURIComponent(state.currentTrack.relativePath)}`;
+  els.audio.currentTime = 0;
+  els.scriptInput.value = getTrackData().script || "";
+  updateOriginalScriptButton();
+  renderScript();
 }
 
 async function boot() {
@@ -610,6 +691,7 @@ els.search.addEventListener("input", () => {
 els.applyScript.addEventListener("click", applyScript);
 els.estimateTimes.addEventListener("click", estimateTimes);
 els.scriptPlayToggle.addEventListener("click", toggleCurrentTrack);
+els.originalScript.addEventListener("click", showOriginalScript);
 els.audio.addEventListener("timeupdate", updateActiveWord);
 els.audio.addEventListener("play", updateScriptAudioToggle);
 els.audio.addEventListener("pause", updateScriptAudioToggle);

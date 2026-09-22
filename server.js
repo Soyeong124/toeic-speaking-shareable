@@ -524,6 +524,89 @@ function recordingFolderForTrack(trackId) {
   return path.join(RECORDINGS_DIR, safeSegment(parsed.dir || "root"), safeSegment(parsed.name || "track"));
 }
 
+function findRecording(data, recordingId) {
+  for (const [trackId, recordings] of Object.entries(data.tracks || {})) {
+    const index = recordings.findIndex((recording) => recording.id === recordingId);
+    if (index >= 0) return { trackId, index, recording: recordings[index] };
+  }
+  return null;
+}
+
+function transcribeRecording(recording, callback) {
+  if (!fs.existsSync(TRANSCRIBE_SCRIPT)) {
+    callback(new Error("음성 인식 파일을 찾지 못했습니다."));
+    return;
+  }
+
+  const jobId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const jobFile = path.join(DATA_DIR, `recording-transcription-${jobId}.json`);
+  writeJson(jobFile, { audioRoot: RECORDINGS_DIR, tracks: [recording.path] });
+
+  const cacheDir = huggingFaceCache();
+  const child = spawn(pythonExecutable(), [TRANSCRIBE_SCRIPT, jobFile, "--model", TRANSCRIPTION_MODEL], {
+    cwd: __dirname,
+    windowsHide: true,
+    env: {
+      ...process.env,
+      PYTHONUTF8: "1",
+      HF_HOME: cacheDir,
+      HUGGINGFACE_HUB_CACHE: path.join(cacheDir, "hub"),
+      HF_HUB_DISABLE_SYMLINKS_WARNING: "1"
+    }
+  });
+
+  let stdoutBuffer = "";
+  let stderr = "";
+  let result = null;
+  let transcriptionError = "";
+  let finished = false;
+
+  const consumeLine = (line) => {
+    if (!line.trim()) return;
+    try {
+      const event = JSON.parse(line);
+      if (event.type === "result") result = event.transcript;
+      if (event.type === "error") transcriptionError = event.error || "녹음을 인식하지 못했습니다.";
+    } catch {
+      stderr += `${line}\n`;
+    }
+  };
+
+  const finish = (error, transcript) => {
+    if (finished) return;
+    finished = true;
+    if (fs.existsSync(jobFile)) fs.unlinkSync(jobFile);
+    callback(error, transcript);
+  };
+
+  child.stdout.on("data", (chunk) => {
+    stdoutBuffer += chunk.toString("utf8");
+    const lines = stdoutBuffer.split(/\r?\n/);
+    stdoutBuffer = lines.pop() || "";
+    lines.forEach(consumeLine);
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr = `${stderr}${chunk.toString("utf8")}`.slice(-12000);
+  });
+  child.on("error", (error) => {
+    finish(new Error(error.code === "ENOENT"
+      ? "Python을 찾지 못했습니다. README의 음성 인식 준비 단계를 먼저 진행해 주세요."
+      : error.message));
+  });
+  child.on("close", (code) => {
+    consumeLine(stdoutBuffer);
+    if (finished) return;
+    if (code !== 0 || !result) {
+      const missingPackage = stderr.includes("No module named 'faster_whisper'");
+      finish(new Error(missingPackage
+        ? "음성 인식 도구가 설치되지 않았습니다. README의 음성 인식 준비 단계를 진행해 주세요."
+        : (transcriptionError || stderr.trim().split(/\r?\n/).pop() || "녹음 스크립트 추출에 실패했습니다.")));
+      return;
+    }
+    finish(null, result);
+  });
+}
+
 function handleApi(req, res, url) {
   if (url.pathname === "/api/library" && req.method === "GET") {
     sendJson(res, 200, { audioRoot: AUDIO_ROOT, folders: getLibrary() });
@@ -669,6 +752,36 @@ function handleApi(req, res, url) {
     if (!deleted) return sendJson(res, 404, { ok: false, error: "Recording not found" });
     writeJson(RECORDINGS_FILE, data);
     sendJson(res, 200, { ok: true });
+    return true;
+  }
+
+  if (url.pathname === "/api/recordings/transcribe" && req.method === "POST") {
+    const recordingId = url.searchParams.get("id");
+    const data = readJson(RECORDINGS_FILE, { tracks: {} });
+    const found = findRecording(data, recordingId);
+    if (!found) return sendJson(res, 404, { ok: false, error: "녹음을 찾지 못했습니다." });
+
+    const filePath = safeJoin(RECORDINGS_DIR, found.recording.path);
+    if (!filePath || !fs.existsSync(filePath)) {
+      return sendJson(res, 404, { ok: false, error: "녹음 파일을 찾지 못했습니다." });
+    }
+
+    transcribeRecording(found.recording, (error, transcript) => {
+      if (error) return sendJson(res, 500, { ok: false, error: error.message });
+
+      const latestData = readJson(RECORDINGS_FILE, { tracks: {} });
+      const latest = findRecording(latestData, recordingId);
+      if (!latest) return sendJson(res, 404, { ok: false, error: "녹음이 삭제되었습니다." });
+
+      latest.recording.transcript = transcript.script || "";
+      latest.recording.transcriptWordTimes = transcript.wordTimes || {};
+      latest.recording.transcriptLanguage = transcript.language || "en";
+      latest.recording.transcriptLanguageProbability = transcript.languageProbability || 0;
+      latest.recording.transcriptGeneratedAt = new Date().toISOString();
+      latest.recording.transcriptGeneratedBy = transcript.generatedBy || `faster-whisper:${TRANSCRIPTION_MODEL}`;
+      writeJson(RECORDINGS_FILE, latestData);
+      sendJson(res, 200, { ok: true, recording: latest.recording });
+    });
     return true;
   }
 
