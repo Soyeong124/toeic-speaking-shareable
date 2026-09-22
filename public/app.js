@@ -11,7 +11,9 @@ const state = {
   mediaRecorder: null,
   recordingChunks: [],
   recordingStartedAt: null,
-  mobileView: "library"
+  mobileView: "library",
+  activeTranscriptionJobId: null,
+  watchedTranscriptionJobIds: new Set()
 };
 
 const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "m4a", "aac", "ogg", "webm", "flac"]);
@@ -20,6 +22,8 @@ const $ = (selector) => document.querySelector(selector);
 const els = {
   audioRoot: $("#audioRoot"),
   uploadStatus: $("#uploadStatus"),
+  transcriptionProgress: $("#transcriptionProgress"),
+  transcriptionProgressBar: $("#transcriptionProgressBar"),
   fileInput: $("#fileInput"),
   folderInput: $("#folderInput"),
   fileButton: $("#fileButton"),
@@ -113,7 +117,10 @@ async function uploadFiles(fileList) {
     return;
   }
 
-  els.uploadStatus.textContent = `${files.length}개 파일을 추가하는 중`;
+  els.uploadStatus.textContent = `${files.length}개 파일을 업로드하는 중`;
+  els.transcriptionProgress.classList.remove("hidden");
+  els.transcriptionProgressBar.style.width = "4%";
+  els.transcriptionProgress.setAttribute("aria-valuenow", "4");
   const form = new FormData();
   files.forEach((file) => {
     form.append("relativePaths", file.webkitRelativePath || file.name);
@@ -125,19 +132,96 @@ async function uploadFiles(fileList) {
     const data = await response.json();
     if (!response.ok || !data.ok) throw new Error(data.error || "업로드에 실패했습니다.");
 
+    const currentFolderName = state.currentFolder?.name;
     state.folders = data.folders || [];
+    if (currentFolderName) state.currentFolder = getFolderByName(currentFolderName);
     renderFolders();
     renderTracks();
     const skippedText = data.skipped?.length ? `, ${data.skipped.length}개 제외` : "";
-    els.uploadStatus.textContent = `${data.imported.length}개 파일 추가 완료${skippedText}`;
-    toast("음성 라이브러리를 업데이트했어요.");
+    els.uploadStatus.textContent = `${data.imported.length}개 업로드 완료${skippedText}`;
+    toast("업로드를 마쳤어요. 영어 스크립트를 추출합니다.");
     if (!state.currentFolder && state.folders[0]) selectFolder(state.folders[0].name, { keepMobileView: true });
+    if (data.transcriptionJob) {
+      state.activeTranscriptionJobId = data.transcriptionJob.id;
+      showTranscriptionJob(data.transcriptionJob);
+      watchTranscriptionJob(data.transcriptionJob.id);
+    } else {
+      els.transcriptionProgressBar.style.width = "100%";
+      els.transcriptionProgress.setAttribute("aria-valuenow", "100");
+    }
   } catch (error) {
     els.uploadStatus.textContent = "업로드 실패";
+    els.transcriptionProgress.classList.add("hidden");
     toast(error.message || "업로드에 실패했습니다.");
   } finally {
     els.fileInput.value = "";
     els.folderInput.value = "";
+  }
+}
+
+function showTranscriptionJob(job) {
+  const total = Math.max(1, Number(job.total) || 1);
+  const percent = Math.round((Number(job.completed || 0) / total) * 100);
+  const currentName = String(job.current || "").split("/").pop();
+  els.transcriptionProgress.classList.remove("hidden");
+  els.transcriptionProgressBar.style.width = `${job.status === "completed" ? 100 : Math.max(4, percent)}%`;
+  els.transcriptionProgress.setAttribute("aria-valuenow", String(job.status === "completed" ? 100 : percent));
+
+  if (job.status === "queued") {
+    els.uploadStatus.textContent = `${job.total}개 업로드 완료 · 스크립트 추출 대기 중`;
+  } else if (job.stage === "loading-model") {
+    els.uploadStatus.textContent = "영어 인식 모델 준비 중 · 처음 실행은 시간이 걸릴 수 있어요";
+  } else if (job.status === "running") {
+    els.uploadStatus.textContent = `스크립트 추출 중 ${job.completed}/${job.total}${currentName ? ` · ${currentName}` : ""}`;
+  } else if (job.status === "completed") {
+    els.uploadStatus.textContent = job.failed
+      ? `스크립트 ${job.succeeded}개 완료 · ${job.failed}개 실패`
+      : `스크립트 ${job.succeeded}개 자동 추출 완료`;
+  } else if (job.status === "failed") {
+    els.uploadStatus.textContent = `음성 파일은 저장됨 · ${job.error || "스크립트 추출 실패"}`;
+  }
+}
+
+async function refreshTranscripts() {
+  const response = await fetch("/api/transcripts");
+  state.transcripts = await response.json();
+  if (state.currentTrack) els.scriptInput.value = getTrackData().script || "";
+  renderTracks();
+  renderScript();
+}
+
+async function watchTranscriptionJob(jobId) {
+  if (state.watchedTranscriptionJobIds.has(jobId)) return;
+  state.watchedTranscriptionJobIds.add(jobId);
+  let lastCompleted = -1;
+
+  try {
+    while (true) {
+      const response = await fetch(`/api/transcription/jobs?id=${encodeURIComponent(jobId)}`);
+      if (!response.ok) throw new Error("작업 현황을 불러오지 못했습니다.");
+      const data = await response.json();
+      const job = data.job;
+
+      if (state.activeTranscriptionJobId === jobId) showTranscriptionJob(job);
+      if (job.completed !== lastCompleted) {
+        lastCompleted = job.completed;
+        await refreshTranscripts();
+      }
+
+      if (job.status === "completed" || job.status === "failed") {
+        await refreshTranscripts();
+        if (state.activeTranscriptionJobId === jobId && job.status === "completed") {
+          toast(job.failed ? "일부 파일을 제외하고 추출을 마쳤어요." : "영어 스크립트 추출을 마쳤어요.");
+        }
+        break;
+      }
+
+      await new Promise((resolve) => window.setTimeout(resolve, 900));
+    }
+  } catch (error) {
+    if (state.activeTranscriptionJobId === jobId) els.uploadStatus.textContent = error.message;
+  } finally {
+    state.watchedTranscriptionJobIds.delete(jobId);
   }
 }
 
@@ -264,7 +348,7 @@ function renderScript() {
 
   if (!words.length) {
     els.scriptWords.className = "script-words empty";
-    els.scriptWords.textContent = "편집 탭에서 영어 스크립트를 붙여넣고 저장하세요.";
+    els.scriptWords.textContent = "영어 스크립트를 추출하는 중이거나 아직 추출되지 않았습니다.";
     return;
   }
 
@@ -487,10 +571,11 @@ async function deleteRecording(recordingId) {
 }
 
 async function boot() {
-  const [libraryResponse, transcriptsResponse, favoritesResponse] = await Promise.all([
+  const [libraryResponse, transcriptsResponse, favoritesResponse, jobsResponse] = await Promise.all([
     fetch("/api/library"),
     fetch("/api/transcripts"),
-    fetch("/api/favorites")
+    fetch("/api/favorites"),
+    fetch("/api/transcription/jobs")
   ]);
 
   const library = await libraryResponse.json();
@@ -499,6 +584,15 @@ async function boot() {
   state.favoriteTrackIds = new Set(favorites.trackIds || []);
   state.folders = library.folders || [];
   els.audioRoot.textContent = library.audioRoot;
+
+  const jobsData = jobsResponse.ok ? await jobsResponse.json() : { jobs: [] };
+  const activeJobs = (jobsData.jobs || []).filter((job) => job.status === "queued" || job.status === "running");
+  const latestActiveJob = activeJobs.at(-1);
+  if (latestActiveJob) {
+    state.activeTranscriptionJobId = latestActiveJob.id;
+    showTranscriptionJob(latestActiveJob);
+    activeJobs.forEach((job) => watchTranscriptionJob(job.id));
+  }
 
   renderFolders();
   renderTracks();

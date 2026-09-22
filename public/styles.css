@@ -122,6 +122,24 @@ button:disabled {
   line-height: 1.45;
 }
 
+.progress-track {
+  grid-column: 1 / -1;
+  width: 100%;
+  height: 7px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #e5e9ef;
+}
+
+.progress-track span {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 220ms ease;
+}
+
 .search {
   display: grid;
   gap: 8px;

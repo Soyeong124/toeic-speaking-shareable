@@ -29,6 +29,9 @@
           <button id="fileButton" class="primary" type="button">파일 추가</button>
           <button id="folderButton" type="button">폴더 추가</button>
           <p id="uploadStatus">음성 파일이나 폴더를 올려서 시작하세요.</p>
+          <div id="transcriptionProgress" class="progress-track hidden" role="progressbar" aria-label="스크립트 추출 진행률" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <span id="transcriptionProgressBar"></span>
+          </div>
         </div>
 
         <label class="search">
@@ -69,14 +72,14 @@
 
           <div id="readView" class="read-view">
             <div id="scriptWords" class="script-words empty">
-              음성을 추가하고 선택한 뒤, 편집 탭에서 영어 스크립트를 붙여넣으세요.
+              음성을 추가하면 영어 스크립트와 단어 시간이 자동으로 만들어집니다.
             </div>
           </div>
 
           <div id="editView" class="edit-view hidden">
             <label>
               영어 스크립트
-              <textarea id="scriptInput" placeholder="여기에 영어 스크립트를 붙여넣으세요. 저장하면 단어 단위로 클릭할 수 있습니다."></textarea>
+              <textarea id="scriptInput" placeholder="자동 추출된 영어 스크립트를 확인하거나 수정할 수 있습니다."></textarea>
             </label>
             <div class="edit-actions">
               <button id="estimateTimesButton" type="button">단어 시간 자동 배치</button>

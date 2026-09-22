@@ -1,6 +1,7 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const { spawn } = require("child_process");
 const { URL } = require("url");
 
 const PORT = Number(process.env.PORT || 4173);
@@ -13,7 +14,12 @@ const RECORDINGS_DIR = path.join(__dirname, "recordings");
 const TRANSCRIPTS_FILE = path.join(DATA_DIR, "transcripts.json");
 const FAVORITES_FILE = path.join(DATA_DIR, "favorites.json");
 const RECORDINGS_FILE = path.join(DATA_DIR, "recordings.json");
+const TRANSCRIBE_SCRIPT = path.join(__dirname, "scripts", "transcribe_files.py");
+const TRANSCRIPTION_MODEL = process.env.WHISPER_MODEL || "base";
 const AUDIO_EXTENSIONS = new Set([".mp3", ".wav", ".m4a", ".aac", ".ogg", ".webm", ".flac"]);
+const transcriptionJobs = new Map();
+const transcriptionQueue = [];
+let transcriptionWorkerBusy = false;
 
 fs.mkdirSync(PUBLIC_DIR, { recursive: true });
 fs.mkdirSync(AUDIO_ROOT, { recursive: true });
@@ -111,6 +117,198 @@ function readJson(filePath, fallback) {
 
 function writeJson(filePath, data) {
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
+}
+
+function pythonExecutable() {
+  if (process.env.PYTHON_EXE) return process.env.PYTHON_EXE;
+
+  const candidates = process.platform === "win32"
+    ? [
+        path.join(__dirname, ".venv", "Scripts", "python.exe"),
+        path.join(__dirname, "..", ".venv", "Scripts", "python.exe")
+      ]
+    : [
+        path.join(__dirname, ".venv", "bin", "python"),
+        path.join(__dirname, "..", ".venv", "bin", "python")
+      ];
+
+  return candidates.find((candidate) => fs.existsSync(candidate)) || "python";
+}
+
+function huggingFaceCache() {
+  if (process.env.HF_HOME) return process.env.HF_HOME;
+  const localCache = path.join(__dirname, ".cache", "huggingface");
+  const existingParentCache = path.join(__dirname, "..", ".cache", "huggingface");
+  return fs.existsSync(existingParentCache) ? existingParentCache : localCache;
+}
+
+function publicTranscriptionJob(job) {
+  return {
+    id: job.id,
+    status: job.status,
+    stage: job.stage,
+    total: job.total,
+    completed: job.completed,
+    succeeded: job.succeeded,
+    failed: job.failed,
+    current: job.current,
+    errors: job.errors.slice(-10),
+    error: job.error || "",
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt
+  };
+}
+
+function mergeTranscript(trackId, transcript) {
+  const data = readJson(TRANSCRIPTS_FILE, { tracks: {} });
+  data.tracks ||= {};
+  data.tracks[trackId] = transcript;
+  writeJson(TRANSCRIPTS_FILE, data);
+}
+
+function createTranscriptionJob(trackIds) {
+  if (!trackIds.length) return null;
+
+  const now = new Date().toISOString();
+  const job = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    status: "queued",
+    stage: "queued",
+    total: trackIds.length,
+    completed: 0,
+    succeeded: 0,
+    failed: 0,
+    current: "",
+    errors: [],
+    error: "",
+    trackIds,
+    createdAt: now,
+    updatedAt: now
+  };
+
+  transcriptionJobs.set(job.id, job);
+  transcriptionQueue.push(job);
+  setImmediate(processTranscriptionQueue);
+  return job;
+}
+
+function updateJob(job, next) {
+  Object.assign(job, next, { updatedAt: new Date().toISOString() });
+}
+
+function handleTranscriptionEvent(job, event) {
+  if (event.type === "ready") {
+    updateJob(job, { stage: "transcribing" });
+    return;
+  }
+
+  if (event.type === "progress") {
+    updateJob(job, { stage: "transcribing", current: event.trackId || "" });
+    return;
+  }
+
+  if (event.type === "result" && event.trackId && event.transcript) {
+    mergeTranscript(event.trackId, event.transcript);
+    updateJob(job, {
+      completed: job.completed + 1,
+      succeeded: job.succeeded + 1,
+      current: event.trackId
+    });
+    return;
+  }
+
+  if (event.type === "error") {
+    job.errors.push({ trackId: event.trackId || "", error: event.error || "음성을 인식하지 못했습니다." });
+    updateJob(job, {
+      completed: job.completed + 1,
+      failed: job.failed + 1,
+      current: event.trackId || ""
+    });
+  }
+}
+
+function runTranscriptionJob(job, done) {
+  if (!fs.existsSync(TRANSCRIBE_SCRIPT)) {
+    updateJob(job, { status: "failed", stage: "failed", error: "음성 인식 파일을 찾지 못했습니다." });
+    done();
+    return;
+  }
+
+  const jobFile = path.join(DATA_DIR, `transcription-${job.id}.json`);
+  writeJson(jobFile, { audioRoot: AUDIO_ROOT, tracks: job.trackIds });
+  updateJob(job, { status: "running", stage: "loading-model" });
+
+  const cacheDir = huggingFaceCache();
+  const child = spawn(pythonExecutable(), [TRANSCRIBE_SCRIPT, jobFile, "--model", TRANSCRIPTION_MODEL], {
+    cwd: __dirname,
+    windowsHide: true,
+    env: {
+      ...process.env,
+      HF_HOME: cacheDir,
+      HUGGINGFACE_HUB_CACHE: path.join(cacheDir, "hub"),
+      HF_HUB_DISABLE_SYMLINKS_WARNING: "1"
+    }
+  });
+
+  let stdoutBuffer = "";
+  let stderr = "";
+  const consumeLine = (line) => {
+    if (!line.trim()) return;
+    try {
+      handleTranscriptionEvent(job, JSON.parse(line));
+    } catch {
+      stderr += `${line}\n`;
+    }
+  };
+
+  child.stdout.on("data", (chunk) => {
+    stdoutBuffer += chunk.toString("utf8");
+    const lines = stdoutBuffer.split(/\r?\n/);
+    stdoutBuffer = lines.pop() || "";
+    lines.forEach(consumeLine);
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr = `${stderr}${chunk.toString("utf8")}`.slice(-12000);
+  });
+  child.on("error", (error) => {
+    updateJob(job, {
+      status: "failed",
+      stage: "failed",
+      error: error.code === "ENOENT"
+        ? "Python을 찾지 못했습니다. README의 음성 인식 준비 단계를 먼저 진행해 주세요."
+        : error.message
+    });
+  });
+  child.on("close", (code) => {
+    consumeLine(stdoutBuffer);
+    if (fs.existsSync(jobFile)) fs.unlinkSync(jobFile);
+
+    if (code === 0) {
+      updateJob(job, { status: "completed", stage: "completed", current: "" });
+    } else if (job.status !== "failed") {
+      const missingPackage = stderr.includes("No module named 'faster_whisper'");
+      updateJob(job, {
+        status: "failed",
+        stage: "failed",
+        error: missingPackage
+          ? "음성 인식 도구가 설치되지 않았습니다. README의 음성 인식 준비 단계를 진행해 주세요."
+          : (stderr.trim().split(/\r?\n/).pop() || `음성 인식이 중단되었습니다. (${code})`)
+      });
+    }
+    done();
+  });
+}
+
+function processTranscriptionQueue() {
+  if (transcriptionWorkerBusy) return;
+  const job = transcriptionQueue.shift();
+  if (!job) return;
+
+  transcriptionWorkerBusy = true;
+  runTranscriptionJob(job, () => {
+    transcriptionWorkerBusy = false;
+    processTranscriptionQueue();
+  });
 }
 
 function collectBody(req, maxBytes, callback) {
@@ -340,10 +538,32 @@ function handleApi(req, res, url) {
       }
       try {
         const result = saveUploadedAudio(req, body);
-        sendJson(res, 200, { ok: true, folders: getLibrary(), ...result });
+        const job = createTranscriptionJob(result.imported.map((item) => item.relativePath));
+        sendJson(res, 200, {
+          ok: true,
+          folders: getLibrary(),
+          transcriptionJob: job ? publicTranscriptionJob(job) : null,
+          ...result
+        });
       } catch (uploadError) {
         sendJson(res, 400, { ok: false, error: uploadError.message || "업로드에 실패했습니다." });
       }
+    });
+    return true;
+  }
+
+  if (url.pathname === "/api/transcription/jobs" && req.method === "GET") {
+    const jobId = url.searchParams.get("id");
+    if (jobId) {
+      const job = transcriptionJobs.get(jobId);
+      if (!job) return sendJson(res, 404, { ok: false, error: "작업 현황을 찾지 못했습니다." });
+      sendJson(res, 200, { ok: true, job: publicTranscriptionJob(job) });
+      return true;
+    }
+
+    sendJson(res, 200, {
+      ok: true,
+      jobs: [...transcriptionJobs.values()].slice(-20).map(publicTranscriptionJob)
     });
     return true;
   }
