@@ -376,7 +376,7 @@ function resetStudyPanel() {
 }
 
 async function deleteTrack(track) {
-  const confirmed = window.confirm(`"${track.fileName}"을 삭제할까요?\n스크립트, 즐겨찾기, 내 녹음도 함께 삭제됩니다.`);
+  const confirmed = window.confirm(`"${track.fileName}"을 삭제할까요?\n해당 파일의 스크립트, 즐겨찾기, 내 녹음도 함께 삭제됩니다.`);
   if (!confirmed) return;
 
   try {
@@ -398,7 +398,7 @@ async function deleteTrack(track) {
 }
 
 async function deleteFolder(folder) {
-  const confirmed = window.confirm(`"${folder.name}" 폴더와 음성 ${folder.tracks.length}개를 모두 삭제할까요?\n스크립트, 즐겨찾기, 내 녹음도 함께 삭제됩니다.`);
+  const confirmed = window.confirm(`"${folder.name}" 폴더와 음성 ${folder.tracks.length}개를 모두 삭제할까요?\n해당 파일의 스크립트, 즐겨찾기, 내 녹음도 함께 삭제됩니다.`);
   if (!confirmed) return;
 
   try {
@@ -756,7 +756,7 @@ async function boot() {
   const favorites = await favoritesResponse.json();
   state.favoriteTrackIds = new Set(favorites.trackIds || []);
   state.folders = library.folders || [];
-  els.audioRoot.textContent = "내 컴퓨터에 저장되는 로컬 라이브러리";
+  els.audioRoot.textContent = "영어 음성을 듣고 직접 말하고 다시 들어보세요.";
 
   const jobsData = jobsResponse.ok ? await jobsResponse.json() : { jobs: [] };
   const activeJobs = (jobsData.jobs || []).filter((job) => job.status === "queued" || job.status === "running");
